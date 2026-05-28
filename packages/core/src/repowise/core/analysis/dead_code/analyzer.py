@@ -29,6 +29,7 @@ from .constants import (
 )
 from .contract_methods import is_contract_method
 from .go_reachability import build_go_package_files, is_go_file_reachable
+from .jvm_reachability import build_jvm_package_files, is_jvm_file_reachable
 
 # Symbol kinds that cannot be independently imported by name in any
 # supported language. Flagging them as "unused exports" is a guaranteed
@@ -199,6 +200,20 @@ _ENTRY_POINT_SYMBOL_NAMES: frozenset[str] = frozenset({
     "clientAction",
     # ---- SvelteKit page/layout module exports (distinctive names) ----
     "trailingSlash",
+    # ---- JVM (Java + Kotlin) runtime / serialization / contract anchors ----
+    # ``main`` is already covered above; these are the rest of the names
+    # the JVM resolves through reflection / serialization / Lombok-equivalent
+    # generation, never through static call edges. ``INSTANCE`` is the
+    # Kotlin ``object Foo`` singleton field; the JVM accesses it directly.
+    "serialVersionUID",
+    "readObject",
+    "writeObject",
+    "readObjectNoData",
+    "readResolve",
+    "writeReplace",
+    "canEqual",                    # Lombok-equivalent generated method
+    "INSTANCE",                    # Kotlin object singleton field
+    "Companion",                   # Kotlin companion-object accessor
 })
 from .dynamic_markers import find_dynamic_edge_files, find_dynamic_import_files
 from .models import DeadCodeFindingData, DeadCodeKind, DeadCodeReport
@@ -290,12 +305,21 @@ class DeadCodeAnalyzer:
         # Lazily-built ``.go`` package-directory → file-node map, used by the
         # Go package-granular reachability hook (see ``go_reachability``).
         self._go_package_files: dict[str, list[str]] | None = None
+        # Lazily-built JVM (``.java`` + ``.kt``) package-directory map; see
+        # :mod:`jvm_reachability`.
+        self._jvm_package_files: dict[str, list[str]] | None = None
 
     def _go_packages(self) -> dict[str, list[str]]:
         """Return the cached Go package map, building it on first use."""
         if self._go_package_files is None:
             self._go_package_files = build_go_package_files(self.graph)
         return self._go_package_files
+
+    def _jvm_packages(self) -> dict[str, list[str]]:
+        """Return the cached JVM package map, building it on first use."""
+        if self._jvm_package_files is None:
+            self._jvm_package_files = build_jvm_package_files(self.graph)
+        return self._jvm_package_files
 
     def analyze(
         self,
@@ -442,8 +466,15 @@ class DeadCodeAnalyzer:
             # importer can still be live (entry-package sibling next to
             # main.go, or a package whose siblings carry the import). Delegate
             # to the Go helper instead of the raw file-level in_degree check.
-            if str(node).endswith(".go"):
-                if is_go_file_reachable(str(node), self.graph, self._go_packages()):
+            node_str = str(node)
+            if node_str.endswith(".go"):
+                if is_go_file_reachable(node_str, self.graph, self._go_packages()):
+                    continue
+            elif node_str.endswith(".java") or node_str.endswith(".kt"):
+                # JVM reachability is package-aware too: sibling-rescued
+                # packages plus stereotype-annotated / ``main``-carrying
+                # files surface as live even with no direct importer.
+                if is_jvm_file_reachable(node_str, self.graph, self._jvm_packages()):
                     continue
             elif self.graph.in_degree(node) > 0:
                 continue
@@ -866,6 +897,29 @@ class DeadCodeAnalyzer:
                 continue
             if self._name_matches_dynamic(sym_name, dynamic_patterns):
                 continue
+
+            # Framework-decorator skip — same shape as unused-export. A
+            # private ``@PostConstruct``/``@EventListener``/``@Scheduled``
+            # method is invoked by the container, not by a source call.
+            decorators = node_data.get("decorators") or []
+            if decorators:
+                def _dec_base(d: str) -> str:
+                    stripped = d.lstrip("@")
+                    paren = stripped.find("(")
+                    return stripped[:paren] if paren >= 0 else stripped
+
+                if any(
+                    _dec_base(d).startswith(prefix)
+                    for d in decorators
+                    for prefix in _FRAMEWORK_DECORATORS
+                ):
+                    continue
+                if any(
+                    _dec_base(d).endswith(suffix)
+                    for d in decorators
+                    for suffix in _FRAMEWORK_DECORATOR_SUFFIXES
+                ):
+                    continue
 
             has_callers = any(
                 self.graph.get_edge_data(pred, node, {}).get("edge_type") == "calls"
