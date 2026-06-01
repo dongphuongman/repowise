@@ -50,6 +50,12 @@ class TestCliBasics:
         assert result.exit_code == 0
         assert "--mode" in result.output
 
+    def test_reindex_help(self, runner):
+        result = runner.invoke(cli, ["reindex", "--help"])
+        assert result.exit_code == 0
+        assert "--embedder" in result.output
+        assert "mock" in result.output
+
     def test_export_help(self, runner):
         result = runner.invoke(cli, ["export", "--help"])
         assert result.exit_code == 0

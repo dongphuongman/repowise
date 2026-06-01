@@ -67,6 +67,10 @@ def _build_embedder():
         openrouter — OpenRouterEmbedder via OPENROUTER_API_KEY env var
     """
     name = os.environ.get("REPOWISE_EMBEDDER", "mock").lower()
+    if name == "ollama":
+        from repowise.core.providers.embedding.ollama import OllamaEmbedder
+
+        return OllamaEmbedder()
     if name == "gemini":
         from repowise.core.providers.embedding.gemini import GeminiEmbedder
 
@@ -82,7 +86,9 @@ def _build_embedder():
 
         model = os.environ.get("REPOWISE_EMBEDDING_MODEL", "google/gemini-embedding-001")
         return OpenRouterEmbedder(model=model)
-    logger.warning("embedder.mock_active — set REPOWISE_EMBEDDER=gemini, openai, or openrouter for real RAG")
+    logger.warning(
+        "embedder.mock_active: set REPOWISE_EMBEDDER=gemini, openai, openrouter, or ollama for real RAG"
+    )
     return MockEmbedder()
 
 

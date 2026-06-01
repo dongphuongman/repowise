@@ -259,7 +259,7 @@ def _prompt_generation(
 
     # Embedder selection
     detected_embedder = _resolve_embedder_from_env()
-    embedder_choices = ["gemini", "openai", "mock"]
+    embedder_choices = ["gemini", "openai", "openrouter", "ollama", "mock"]
     result["embedder"] = click.prompt(
         "  Embedder for RAG",
         default=detected_embedder,
@@ -374,6 +374,10 @@ def _resolve_embedder_from_env() -> str:
         return "gemini"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter"
+    if os.environ.get("OLLAMA_EMBEDDING_MODEL"):
+        return "ollama"
     return "mock"
 
 

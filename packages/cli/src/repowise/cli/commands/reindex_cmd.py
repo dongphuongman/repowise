@@ -18,7 +18,7 @@ from repowise.cli.helpers import (
 @click.argument("path", required=False, default=None)
 @click.option(
     "--embedder",
-    type=click.Choice(["gemini", "openai", "auto"]),
+    type=click.Choice(["gemini", "openai", "openrouter", "ollama", "mock", "auto"]),
     default="auto",
     help="Embedder to use. 'auto' detects from env vars / config.",
 )
@@ -47,30 +47,28 @@ async def _reindex(repo_path, embedder_name: str, batch_size: int) -> None:
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from repowise.cli.providers.embedders import build_embedder
     from repowise.core.persistence.database import create_engine, init_db
     from repowise.core.persistence.models import Page
+    from repowise.core.providers.embedding.base import MockEmbedder
 
     # --- Resolve embedder ---
+    requested_embedder = embedder_name
     if embedder_name == "auto":
         from repowise.cli.commands.init_cmd import _resolve_embedder
 
         embedder_name = _resolve_embedder(None)
 
-    if embedder_name == "gemini":
-        from repowise.core.providers.embedding.gemini import GeminiEmbedder
-
-        embedder_impl = GeminiEmbedder()
-        console.print("[green]Using Gemini embedder[/green]")
-    elif embedder_name == "openai":
-        from repowise.core.providers.embedding.openai import OpenAIEmbedder
-
-        embedder_impl = OpenAIEmbedder()
-        console.print("[green]Using OpenAI embedder[/green]")
-    else:
+    embedder_impl = build_embedder(embedder_name)
+    if isinstance(embedder_impl, MockEmbedder) and requested_embedder != "mock":
         console.print(
-            "[red]No real embedder available. Set GEMINI_API_KEY or OPENAI_API_KEY.[/red]"
+            "[red]No real embedder available. Set a real embedder key, configure Ollama, or pass --embedder mock for test vectors.[/red]"
         )
         raise click.Abort()
+    if embedder_name == "mock":
+        console.print("[yellow]Using mock embedder (deterministic test vectors)[/yellow]")
+    else:
+        console.print(f"[green]Using {embedder_name} embedder[/green]")
 
     # --- Create LanceDB vector store ---
     lance_dir = Path(repo_path) / ".repowise" / "lancedb"

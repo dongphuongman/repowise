@@ -15,7 +15,7 @@ import {
 } from "@repowise-dev/ui/ui/select";
 
 const PROVIDERS = ["gemini", "openai", "anthropic", "deepseek", "ollama", "litellm", "mock"] as const;
-const EMBEDDERS = ["mock", "gemini", "openai"] as const;
+const EMBEDDERS = ["mock", "gemini", "openai", "openrouter", "ollama"] as const;
 
 const MODEL_PLACEHOLDERS: Record<string, string> = {
   gemini: "gemini-3.1-flash-lite-preview",
@@ -40,6 +40,8 @@ const PROVIDER_ENV_VARS: Record<string, { vars: string[]; installHint: string }>
 const EMBEDDER_ENV_VARS: Record<string, string[]> = {
   gemini: ["GEMINI_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  ollama: ["OLLAMA_BASE_URL"],
   mock: [],
 };
 

@@ -1495,8 +1495,8 @@ def _show_completion(
     "--embedder",
     "embedder_name",
     default=None,
-    type=click.Choice(["gemini", "openai", "mock"]),
-    help="Embedder for RAG: gemini | openai | mock (default: auto-detect).",
+    type=click.Choice(["gemini", "openai", "openrouter", "ollama", "mock"]),
+    help="Embedder for RAG: gemini | openai | openrouter | ollama | mock (default: auto-detect).",
 )
 @click.option("--skip-tests", is_flag=True, default=False, help="Skip test files.")
 @click.option("--skip-infra", is_flag=True, default=False, help="Skip infrastructure files.")

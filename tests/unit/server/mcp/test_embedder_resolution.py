@@ -29,6 +29,9 @@ _EMBEDDER_ENV_VARS = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "OPENROUTER_API_KEY",
+    "OLLAMA_BASE_URL",
+    "OLLAMA_EMBEDDING_MODEL",
+    "OLLAMA_EMBEDDING_DIMS",
 )
 
 
@@ -86,6 +89,23 @@ def test_openrouter_without_key_degrades(monkeypatch):
     assert status["degraded"] is True
     assert status["requested"] == "openrouter"
     assert "OPENROUTER_API_KEY" in status["reason"]
+
+
+def test_ollama_resolves_without_api_key(monkeypatch):
+    """Local Ollama embeddings do not require a cloud API key at construction."""
+    from repowise.core.providers.embedding.ollama import OllamaEmbedder
+
+    monkeypatch.setenv("REPOWISE_EMBEDDER", "ollama")
+    monkeypatch.setenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:0.6b")
+
+    embedder = _server._resolve_embedder()
+
+    assert isinstance(embedder, OllamaEmbedder)
+    assert _state._embedder_status == {
+        "active": "ollama",
+        "requested": "ollama",
+        "degraded": False,
+    }
 
 
 def test_unknown_embedder_name_degrades(monkeypatch):
