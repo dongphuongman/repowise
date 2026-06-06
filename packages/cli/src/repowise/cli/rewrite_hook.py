@@ -86,12 +86,20 @@ FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
+        "lint_output",
+        re.compile(
+            r"^(eslint\b|biome (?:check|lint)\b|ruff\b(?!\s+format)|flake8\b|pylint\b|mypy\b|"
+            r"cargo clippy\b|golangci-lint\b|npm run lint\b|pnpm (?:run )?lint\b|"
+            r"yarn (?:run )?lint\b|next lint\b)"
+        ),
+    ),
+    (
         "build_output",
         re.compile(
             r"^(npm run b|npm run-script b|pnpm (?:run )?b|yarn (?:run )?b|"
-            r"tsc\b|cargo (?:build|check|clippy)\b|go (?:build|vet)\b|"
+            r"tsc\b|cargo (?:build|check)\b|go (?:build|vet)\b|"
             r"make\b|vite build|webpack\b|next build|dotnet build\b|"
-            r"npm run (?:type-check|typecheck|lint|compile)\b|gradle|mvn\b)"
+            r"npm run (?:type-check|typecheck|compile)\b|gradle|mvn\b)"
         ),
     ),
     ("git_status", re.compile(r"^git status\b(?!.*--porcelain)")),
@@ -168,10 +176,11 @@ _SHELL_SYNTAX_RE = re.compile(r"[|&;<>`\n]|\$\(")
 _WATCH_RE = re.compile(r"--watch(?:all)?\b|--looponfail\b|(?:^|\s)-f\b.*\.log\b|--follow\b")
 
 # PowerShell cmdlets all follow the Verb-Noun shape (Get-ChildItem,
-# Select-Object, ForEach-Object, …). None of the distill families start
-# with a dashed token, so a Verb-Noun first token is a safe fast bail —
-# PS-native pipelines and object output don't survive wrapping anyway.
+# Select-Object, ForEach-Object, …), so a Verb-Noun first token is a safe
+# fast bail — PS-native pipelines and object output don't survive wrapping
+# anyway. The only dashed token among the distill families is exempted.
 _PS_CMDLET_RE = re.compile(r"^[a-z]+-[a-z]")
+_DASHED_TOOL_TOKENS = frozenset({"golangci-lint"})
 
 
 def classify(command: str) -> str | None:
@@ -182,7 +191,9 @@ def classify(command: str) -> str | None:
     if not normalized or normalized.startswith("repowise"):
         return None
     first = normalized.split(None, 1)[0]
-    if first in IGNORED_FIRST_TOKENS or _PS_CMDLET_RE.match(first):
+    if first in IGNORED_FIRST_TOKENS or (
+        _PS_CMDLET_RE.match(first) and first not in _DASHED_TOOL_TOKENS
+    ):
         return None
     if _WATCH_RE.search(normalized):
         return None
@@ -296,8 +307,11 @@ def decide(command: str, cwd: str, shell: str = "posix") -> RewriteResult | None
     if family_setting in _VALID_PERMISSIONS:
         permission = family_setting
 
+    # The --source tag lands in the savings ledger so `repowise saved
+    # --by source` can tell hook surfaces apart from direct CLI use.
+    source = "hook-powershell" if shell == "powershell" else "hook-bash"
     return RewriteResult(
-        command=f"repowise distill {command.strip()}",
+        command=f"repowise distill --source {source} {command.strip()}",
         permission=permission,
         reason=(
             f"repowise distill: compact {family} rendering; full output stays "
