@@ -23,10 +23,12 @@ import { CredibilityInfoButton } from "@repowise-dev/ui/commits/credibility-stri
 import { CodeEvolutionChart } from "@repowise-dev/ui/commits/code-evolution-chart";
 import { AgentTrendStrip } from "@repowise-dev/ui/commits/agent-trend-strip";
 import { RiskDistributionChart } from "@repowise-dev/ui/git/risk-distribution-chart";
+import { CollapsibleSection } from "@repowise-dev/ui/shared/collapsible-section";
 import {
   getAgentTrend,
   getCommit,
   getCommitEvolution,
+  getCommitStats,
   getCommitsPage,
   getHotspots,
 } from "@/lib/api/git";
@@ -62,6 +64,15 @@ export function CommitsExplorer({ repoId }: { repoId: string }) {
     { revalidateOnFocus: false },
   );
 
+  // Repo-wide stat-card aggregates. Computed server-side over ALL commits — the
+  // loaded page is only a window (and, when risk-sorted, entirely top-tercile),
+  // so reducing `list` here would under-count fixes and inflate high-priority.
+  const { data: stats } = useSWR(
+    `commit-stats:${repoId}`,
+    () => getCommitStats(repoId),
+    { revalidateOnFocus: false },
+  );
+
   // Repo-relative risk distribution — turns the credibility strip's
   // "relative to this repo" claim into a picture.
   const { data: hotspots } = useSWR(
@@ -77,15 +88,19 @@ export function CommitsExplorer({ repoId }: { repoId: string }) {
   );
 
   const list = data?.items ?? [];
-  const total = data?.total ?? list.length;
+  const total = stats?.total_commits ?? data?.total ?? list.length;
   const hasMore = data?.has_more ?? false;
 
-  const highCount = list.filter((c) => c.review_priority === "high").length;
-  const fixCount = list.filter((c) => c.is_fix).length;
+  // Prefer the repo-wide aggregates; fall back to the loaded page only until
+  // the stats request resolves so the cards aren't blank on first paint.
+  const highCount =
+    stats?.high_priority_count ?? list.filter((c) => c.review_priority === "high").length;
+  const fixCount = stats?.fix_commit_count ?? list.filter((c) => c.is_fix).length;
   const avgEntropy =
-    list.length > 0
+    stats?.avg_entropy ??
+    (list.length > 0
       ? list.reduce((s, c) => s + (c.entropy || 0), 0) / list.length
-      : 0;
+      : 0);
 
   if (isLoading && list.length === 0) {
     return (
@@ -121,7 +136,7 @@ export function CommitsExplorer({ repoId }: { repoId: string }) {
         <StatCard
           label="High priority"
           value={highCount}
-          description="top tercile (loaded)"
+          description="top risk tercile"
           icon={<AlertTriangle className="h-4 w-4 text-[var(--color-error)]" />}
         />
         <StatCard
@@ -137,22 +152,21 @@ export function CommitsExplorer({ repoId }: { repoId: string }) {
         />
       </div>
 
-      {/* Secondary signals — smaller than the headline. Risk distribution
-          turns the queue's "relative to this repo" claim into a picture; the
-          agent-trend strip sits alongside it. */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {hotspots && hotspots.length > 0 && (
+      {/* Secondary signals — smaller than the headline. Risk distribution is
+          collapsible (it's a demoted detail); the agent-trend strip is a thin
+          full-width band beneath it. */}
+      {hotspots && hotspots.length > 0 && (
+        <CollapsibleSection
+          title="Risk distribution across the riskiest files"
+          hint={`${Math.min(12, hotspots.length)} of ${hotspots.length}`}
+          defaultOpen
+        >
           <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4">
-            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-[var(--color-text-tertiary)]">
-              Risk distribution across the riskiest files
-            </p>
             <RiskDistributionChart hotspots={hotspots} maxBars={12} />
           </div>
-        )}
-        {trend && trend.agent_commits > 0 && (
-          <AgentTrendStrip trend={trend} />
-        )}
-      </div>
+        </CollapsibleSection>
+      )}
+      {trend && trend.agent_commits > 0 && <AgentTrendStrip trend={trend} />}
 
       <div className="space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-[var(--color-text-tertiary)]">
