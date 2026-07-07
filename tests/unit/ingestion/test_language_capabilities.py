@@ -154,6 +154,7 @@ _PARTIAL = {
     "elixir",
     "clojure",
     "haskell",
+    "lean",
     "erlang",
     "fsharp",
     # dbt ref()/source() lineage (model-name index gated on dbt_project.yml).
@@ -203,6 +204,7 @@ _ENTRY_PATTERNS_BY_LANGUAGE = {
     "clojure": ("core.clj", "main.clj"),
     "dart": ("main.dart",),
     "haskell": ("Main.hs",),
+    "lean": ("Main.lean",),
     "ocaml": ("main.ml",),
     "erlang": ("*_app.erl",),
     "fsharp": ("Program.fs",),

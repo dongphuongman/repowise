@@ -173,11 +173,13 @@ honest file-to-file dependencies, no symbol-level claims.
 
 | Language | Extensions | Import Forms Resolved |
 |----------|-----------|----------------------|
-| **Elixir** | `.ex` `.exs` | `alias` / `import` / `use` / `require` (incl. `Foo.{Bar, Baz}` brace groups) -> `defmodule` index + Mix `lib/` path convention (umbrella `apps/*/lib` included); Elixir/OTP stdlib filtered after local-miss |
-| **Clojure** | `.clj` `.cljc` `.cljs` | `(:require …)` / `(:use …)` vectors and bare specs (string/comment-safe) -> `(ns …)` index + classpath convention (dashes ↔ underscores); `clojure.*`/`cljs.*` filtered |
-| **Haskell** | `.hs` `.lhs` | `import [safe] [qualified] ["pkg"] Foo.Bar` -> `module` declaration index + trailing-PascalCase path inverse (handles any hs-source-dirs without parsing `.cabal`); base-ish namespaces filtered after local-miss |
-| **Erlang** | `.erl` `.hrl` | `-include` / `-include_lib` / `-behaviour` + module-qualified calls (`mod:fun(`) -> `-module()` index; qualified calls are strict local-hit-or-drop (never mint externals) |
-| **F#** | `.fs` `.fsi` `.fsx` | `open` -> file-level `namespace`/`module` index (unambiguous single-file declarations only), plus the fsproj `<Compile Include>` compile-order dependency spine (a real F# constraint: files may only reference earlier files) |
+| **Elixir** | `.ex` `.exs` | `alias` / `import` / `use` / `require` (incl. `Foo.{Bar, Baz}` brace groups) → `defmodule` index + Mix `lib/` path convention (umbrella `apps/*/lib` included); Elixir/OTP stdlib filtered after local-miss |
+| **Dart** | `.dart` | `import` / `export` (re-export) / `part` / `part of` URIs; `package:` URIs via every `pubspec.yaml` `name:` (monorepos included); `dart:` SDK URIs filtered; foreign packages → `external:pub:<name>` |
+| **Clojure** | `.clj` `.cljc` `.cljs` | `(:require …)` / `(:use …)` vectors and bare specs (string/comment-safe) → `(ns …)` index + classpath convention (dashes ↔ underscores); `clojure.*`/`cljs.*` filtered |
+| **Haskell** | `.hs` `.lhs` | `import [safe] [qualified] ["pkg"] Foo.Bar` → `module` declaration index + trailing-PascalCase path inverse (handles any hs-source-dirs without parsing `.cabal`); base-ish namespaces filtered after local-miss |
+| **Lean 4** | `.lean` | `import Foo.Bar`, `import all Foo.Bar`, visibility imports (`public import Foo.Bar` / `private import Foo.Bar` / `meta import Foo.Bar`), and `open [scoped] Foo` → path-derived module index (`Mathlib/Data/Nat/Basic.lean` → `Mathlib.Data.Nat.Basic`); core/library roots filtered after local-miss |
+| **Erlang** | `.erl` `.hrl` | `-include` / `-include_lib` / `-behaviour` + module-qualified calls (`mod:fun(`) → `-module()` index; qualified calls are strict local-hit-or-drop (never mint externals) |
+| **F#** | `.fs` `.fsi` `.fsx` | `open` → file-level `namespace`/`module` index (unambiguous single-file declarations only), plus the fsproj `<Compile Include>` compile-order dependency spine (a real F# constraint: files may only reference earlier files) |
 
 ### SQL + dbt
 
@@ -231,6 +233,7 @@ routine), `sql_update_delete_without_where`, and `sql_cartesian_join`
 and never move the defect headline; dbt/Jinja templates and garbled
 parses emit nothing. See `docs/CODE_HEALTH.md`.
 
+
 ### Structural (git + file tree only)
 
 These languages are tracked in git history (blame, hotspot analysis,
@@ -279,9 +282,9 @@ Extension/filename -> LanguageTag  (via LanguageRegistry)
           Go:     go.mod module path stripping
           Rust:   crate::/self::/super::, mod.rs probing
           C/C++:  compile_commands.json include directories
+          Lightweight tier (Elixir/Dart/Clojure/Haskell/Lean 4/Erlang/F#):
           Dart:   package:/dart:/relative URIs via the pubspec name map +
                   library-name index (dotted part-of)
-          Lightweight tier (Elixir/Clojure/Haskell/Erlang/F#/dbt SQL):
                   regex-extracted imports vs a declared-module-name index
                   (dbt: ref()/source() vs a per-project model-name index)
           Other:  stem-map fallback (filename matching)
