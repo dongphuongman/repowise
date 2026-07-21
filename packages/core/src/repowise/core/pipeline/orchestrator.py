@@ -230,9 +230,11 @@ async def run_pipeline(
     commit_depth = max(1, min(commit_depth, 10000))
 
     # Mode policy: FAST forces ESSENTIAL git indexing and disables doc
-    # generation (and therefore all LLM calls). STANDARD preserves the
-    # caller's flags exactly. This is the single switch point — the rest of
-    # the pipeline reads ``generate_docs`` / the git tier, not ``mode``.
+    # generation (and therefore all LLM calls). DETERMINISTIC generates every
+    # page from a template and supplies its own null provider, so a caller
+    # with no API key still gets a wiki. STANDARD preserves the caller's flags
+    # exactly. This is the single switch point: the rest of the pipeline
+    # reads ``generate_docs`` / the git tier, not ``mode``.
     git_tier = mode.git_tier
     generate_docs = generate_docs and mode.allows_doc_generation
 
@@ -602,7 +604,19 @@ async def run_pipeline(
     # PipelineResult.authoritative_page_types). Stays empty unless curated
     # generation engaged below.
     authoritative_page_types: set[str] = set()
-    if generate_docs and llm_client is not None:
+    # DETERMINISTIC supplies its own null provider so a caller with no key can
+    # still get a wiki. Scoped to this phase rather than assigned over
+    # ``llm_client``: the analysis phase above shares that client, and its
+    # decision extractor branches on truthiness, so a non-None provider that
+    # raises on every call would cost it the heuristic fallbacks it would
+    # otherwise have taken with no provider at all.
+    generation_client = llm_client
+    if generate_docs and mode.deterministic_docs and generation_client is None:
+        from repowise.core.providers.llm.template import TemplateProvider
+
+        generation_client = TemplateProvider()
+
+    if generate_docs and generation_client is not None:
         if progress:
             progress.on_message("info", "Phase 3: Generation")
 
@@ -621,6 +635,15 @@ async def run_pipeline(
                 reasoning=resolve_reasoning(config=_cfg),
                 wiki_style=_style,
                 language=_cfg.get("language", "en"),
+            )
+
+        # The mode decides how pages are rendered, not the caller's config.
+        # A DETERMINISTIC run with an LLM-shaped config would still prompt.
+        if mode.deterministic_docs and not resolved_generation_config.deterministic:
+            from dataclasses import replace as _dc_replace
+
+            resolved_generation_config = _dc_replace(
+                resolved_generation_config, deterministic=True
             )
 
         # Phase 2 enrichment: flag framework-defined HTTP surfaces (FastAPI,
@@ -648,7 +671,10 @@ async def run_pipeline(
         # snapshot generation is already holding. The page-dependent finalize
         # (summary backfill) runs after both complete.
         kg_structural_task = None
-        if knowledge_graph_result is not None:
+        # Skipped in DETERMINISTIC mode: layer naming and the tour are pure
+        # prompting, and the null provider raises rather than stubbing. The
+        # skeleton's structural layers stand on their own.
+        if knowledge_graph_result is not None and not mode.deterministic_docs:
             from repowise.core.generation.knowledge_graph import (
                 enrich_knowledge_graph_structural,
             )
@@ -682,7 +708,7 @@ async def run_pipeline(
                 graph_builder=graph_builder,
                 repo_structure=repo_structure,
                 git_meta_map=git_meta_map,
-                llm_client=llm_client,
+                llm_client=generation_client,
                 embedder=embedder,
                 vector_store=vector_store,
                 concurrency=concurrency,
@@ -734,6 +760,14 @@ async def run_pipeline(
             authoritative_page_types.add("module_page")
         if kg_layers_present:
             authoritative_page_types.add("layer_page")
+        # A deterministic run takes every candidate rather than a budgeted
+        # slice, so an SCC page missing from its output means the cycle is
+        # gone, not that it lost a budget fight. That makes the run
+        # authoritative for the type and lets the sweep clear cycle pages for
+        # cycles that no longer exist. A budgeted run cannot claim the same:
+        # zero SCC pages there may just mean the allocation was zero.
+        if getattr(resolved_generation_config, "deterministic", False):
+            authoritative_page_types.add("scc_page")
 
         # ---- Knowledge Graph enrichment: join + finalize ----------------------
         # The structural half (layer naming + tour) ran concurrently with

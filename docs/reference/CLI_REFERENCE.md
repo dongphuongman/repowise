@@ -45,18 +45,18 @@ repowise init .
 
 1. **Ingestion**, walks every file, parses AST with tree-sitter, builds a two-tier dependency graph (file + symbol nodes), indexes git history (churn, hotspots, ownership, bus factor)
 2. **Analysis**, detects dead code, extracts architectural decisions from inline markers, READMEs, and git history. Runs Leiden community detection and execution flow tracing.
-3. **Generation**, sends structured prompts to the LLM, generates file-level, module-level, and repo-level wiki pages
+3. **Generation**, generates file-level, module-level, and repo-level wiki pages, either by prompting the LLM or, with `--index-only`, by rendering them from the parsed structure
 4. **Persistence**, stores everything in `.repowise/wiki.db`, builds search indexes, generates editor instruction files, registers MCP server and hooks
 
 In workspace mode, adds: repo scanning, per-repo indexing, cross-repo analysis (co-changes, contracts, package deps), workspace CLAUDE.md generation.
 
 **Interactive modes.** Running a bare `repowise init` on a TTY (no `--provider`, `--index-only`, or `--yes`) opens a menu:
 
-1. **Everything**, index + AI docs. After picking a provider you can answer **"Customize?"** to tune any setting before the run.
-2. **Index only**, graph, git, code health, dead code; no LLM, no cost. Answer **"Customize indexing?"** to set exclude patterns, commit limit, skip-tests/infra, submodules, and fast mode.
-3. **Advanced**, full control. First choose **"Generate AI docs?"**; the prompts then split into an **Indexing** section (always) and a **Generation** section (provider, concurrency, embedder, wiki style, onboarding, decision harvesting, tiering, only when docs are on).
+1. **Everything**, index + model-written docs. After picking a provider you can answer **"Customize?"** to tune any setting before the run.
+2. **Index only**, the same layers plus a wiki rendered from structure; no LLM, no key, no cost. Answer **"Customize indexing?"** to set exclude patterns, commit limit, skip-tests/infra, submodules, and fast mode.
+3. **Advanced**, full control. First choose **"Generate model-written wiki docs?"**; the prompts then split into an **Indexing** section (always) and a **Generation** section (provider, concurrency, embedder, wiki style, onboarding, decision harvesting, tiering, only when model-written docs are on).
 
-All three reach the indexing knobs; the LLM-only knobs appear only when docs are enabled. Passing any of the flags below (or `--yes`) skips the menu and runs non-interactively.
+All three reach the indexing knobs; the LLM-only knobs appear only when model-written docs are enabled. Passing any of the flags below (or `--yes`) skips the menu and runs non-interactively.
 
 **Options:**
 
@@ -65,8 +65,8 @@ All three reach the indexing knobs; the LLM-only knobs appear only when docs are
 | `--provider` | LLM provider: `anthropic`, `openai`, `openrouter`, `gemini`, `deepseek`, `kimi`, `ollama`, `litellm`, `codex_cli`, `opencode`, `mock` |
 | `--model` | Model name override (e.g., `claude-sonnet-4-6`) |
 | `--embedder` | Embedder for semantic search: `gemini`, `openai`, `openrouter`, `ollama`, `mock` (default: auto-detect) |
-| `--index-only` | Skip LLM generation. Only parse, build graph, and index git. Free. |
-| `--mode` | Pipeline depth: `standard` (default) or `fast` (graph + essential-git only, no per-file blame/co-change, no LLM, for very large repos; upgrade later with `update --full`) |
+| `--index-only` | No LLM calls, no API key, no spend. Parses, builds the graph, indexes git, and renders the whole wiki from that structure: file, module, layer and cycle (SCC) pages, the architecture diagram, the repo overview, API and infra pages, and the onboarding collection. Symbol spotlight pages are skipped, since the file pages already carry that content. Every page footer says it was derived from structure, and the repo overview covers composition, entry points, clusters and dependencies rather than what the project does end to end. Full-text search works; semantic search needs an embedder. Upgrade to model-written prose later with `update --full`, or restyle with `restyle`. |
+| `--mode` | Pipeline depth: `standard` (default) or `fast` (graph + essential-git only, no per-file blame/co-change, no LLM docs, for very large repos; upgrade later with `update --full`) |
 | `--skip-tests` | Exclude test files from doc generation |
 | `--skip-infra` | Exclude infrastructure files (Dockerfiles, Makefiles, Terraform) |
 | `--exclude` / `-x` | Gitignore-style exclusion pattern. Repeatable. |
@@ -102,7 +102,7 @@ repowise init                                         # interactive
 repowise init --provider anthropic --yes              # automated
 repowise init --provider codex_cli --codex --yes       # use authenticated Codex CLI
 repowise init --provider opencode --yes               # use local OpenCode CLI
-repowise init --index-only                            # free, no LLM
+repowise init --index-only                            # free, wiki rendered from structure
 repowise init --dry-run                               # preview cost
 repowise init --test-run                              # quick test (10 files)
 repowise init --provider openai --model qwen3 --reasoning off
@@ -170,7 +170,7 @@ See [WORKTREES.md](../scale/WORKTREES.md).
 
 **First-time indexing:** `update --workspace` runs full first-time indexing for workspace entries that have no `.repowise/` dir yet (previously skipped with `"not_indexed"`). The pipeline runs index-only, no LLM cost, and writes a state.json marker. Doc generation then follows on the next update once the repo has an index: pass `--docs` (or set its `docs_enabled`) and it regenerates pages like any other member.
 
-**Upgrading a fast index to full (`--full`):** a repo first indexed with `repowise init --mode fast` has the full dependency graph + metrics persisted, but only the *essential* git tier (last commits, no per-file blame or co-change) and no LLM docs. `repowise update --full` upgrades it **incrementally**: it backfills the git tier to FULL (per-file blame + repo-wide co-change) using a resumable, checkpointed worker, then generates the docs that fast mode skipped. Crucially, it **reuses the persisted graph**, the dependency graph is rehydrated from SQL rather than re-parsed and re-resolved, so the expensive import/call/heritage resolution and centrality computation the fast index already did are not repeated. This is measurably cheaper than re-running a full `init`. The backfill is resumable: if it is interrupted, re-running `repowise update --full` picks it up. A provider is required (the fast index made no LLM calls), so pass `--provider`/`--model` or have one configured. Single-repo only; it errors if run in workspace mode.
+**Upgrading a fast index to full (`--full`):** a repo first indexed with `repowise init --mode fast` has the full dependency graph + metrics persisted, but only the *essential* git tier (last commits, no per-file blame or co-change) and no LLM docs. `repowise update --full` upgrades it **incrementally**: it backfills the git tier to FULL (per-file blame + repo-wide co-change) using a resumable, checkpointed worker, then generates the docs that fast mode skipped. Crucially, it **reuses the persisted graph**, the dependency graph is rehydrated from SQL rather than re-parsed and re-resolved, so the expensive import/call/heritage resolution and centrality computation the fast index already did are not repeated. This is measurably cheaper than re-running a full `init`. The backfill is resumable: if it is interrupted, re-running `repowise update --full` picks it up. A provider is required (the fast index made no LLM calls), so pass `--provider`/`--model` or have one configured. It does not build the vector store, so run `repowise reindex` afterwards if you want semantic search. Single-repo only; it errors if run in workspace mode.
 
 **Examples:**
 

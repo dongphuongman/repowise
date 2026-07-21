@@ -246,27 +246,34 @@ def run_repo_generation(
     vector_store: Any = build_vector_store(repo_path, embedder_impl)
     result.vector_store = vector_store
 
+    deterministic = bool(getattr(gen_config, "deterministic", False))
+
     # Cost tracker backed by the real DB so every LLM call is persisted to the
     # llm_costs table. Attached to the provider unconditionally (all providers
-    # accept ``_cost_tracker`` as an attribute).
-    cost_tracker = build_cost_tracker(repo_path, result.repo_name)
+    # accept ``_cost_tracker`` as an attribute). A deterministic run makes no
+    # calls, so it gets none: an empty ledger, not a ledger of zeroes.
+    cost_tracker = None if deterministic else build_cost_tracker(repo_path, result.repo_name)
     provider._cost_tracker = cost_tracker
 
-    if verbose:
+    if verbose and not deterministic:
         console.print(
             "  [dim](each generated page is saved as it completes — safe to Ctrl-C, "
             "then run 'repowise init --resume' to pick up where it stopped)[/dim]"
         )
 
-    with Progress(
+    # No cost column on a deterministic run: it would sit at $0.000 for the
+    # whole run, which reads as an unanswered question rather than an answer.
+    columns: list[Any] = [
         SpinnerColumn(spinner_name=OWL_SPINNER, style=BRAND_STYLE),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MaybeCountColumn(),
         TimeElapsedColumn(),
-        TextColumn("[green]${task.fields[cost]:.3f}[/green]"),
-        console=console,
-    ) as gen_progress:
+    ]
+    if not deterministic:
+        columns.append(TextColumn("[green]${task.fields[cost]:.3f}[/green]"))
+
+    with Progress(*columns, console=console) as gen_progress:
         gen_callback = RichProgressCallback(gen_progress, console)
         generated_pages = run_async(
             run_generation_with_persistence(
@@ -308,13 +315,16 @@ def run_repo_generation(
     if verbose:
         console.print(f"  [green]✓[/green] Generated [bold]{len(generated_pages)}[/bold] pages")
 
-    _enrich_knowledge_graph(
-        result=result,
-        provider=provider,
-        gen_config=gen_config,
-        generated_pages=generated_pages,
-        verbose=verbose,
-    )
-
-    flush_cost_tracker(cost_tracker)
+    # KG enrichment is layer naming and the guided tour, both pure prompting.
+    # A deterministic run has no model to ask, and the skeleton's structural
+    # layers stand on their own.
+    if not deterministic:
+        _enrich_knowledge_graph(
+            result=result,
+            provider=provider,
+            gen_config=gen_config,
+            generated_pages=generated_pages,
+            verbose=verbose,
+        )
+        flush_cost_tracker(cost_tracker)
     return generated_pages
