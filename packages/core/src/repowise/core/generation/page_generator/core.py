@@ -40,7 +40,12 @@ from .decision_harvest import (
     HARVESTABLE_PAGE_TYPES,
     harvest_decisions,
 )
-from .deterministic import DeterministicRenderMixin, oneline
+from .deterministic import (
+    DeterministicRenderMixin,
+    as_markdown,
+    oneline,
+    signature,
+)
 from .helpers import _extract_summary, _now_iso
 from .pertype import PerTypeGenerationMixin
 from .prompts import SUPPORTED_LANGUAGES, SYSTEM_PROMPTS
@@ -60,25 +65,31 @@ def _attach_file_provenance(page: GeneratedPage, ctx: FilePageContext) -> None:
     renders ``layer_name`` as a zoom-out chip and ``sources`` as a "built
     from" provenance list.
     """
+    from ...analysis.knowledge_graph import _slugify
+    from ..layers import infer_layer
+
     if ctx.kg_layer_name:
         page.metadata["layer_name"] = ctx.kg_layer_name
-        # Stable slug id of the layer page this file links to. The layer page
-        # is keyed by slug (``layer:<slug>``) so the join survives the LLM
-        # layer-name enrichment that mutates ``layer_name`` after generation.
-        if ctx.kg_layer_id:
-            page.metadata["layer_id"] = ctx.kg_layer_id
         if ctx.kg_layer_role:
             page.metadata["layer_role"] = ctx.kg_layer_role
     else:
         # Guarantee every file page carries a layer so the Architecture tree
         # can group it. When the knowledge graph has no layer, fall back to
         # path-based inference.
-        from ...analysis.knowledge_graph import _slugify
-        from ..layers import infer_layer
+        page.metadata["layer_name"] = infer_layer(
+            ctx.file_path, getattr(ctx, "language", None)
+        )
 
-        inferred = infer_layer(ctx.file_path, getattr(ctx, "language", None))
-        page.metadata["layer_name"] = inferred
-        page.metadata["layer_id"] = f"layer:{_slugify(inferred)}"
+    # ``layer_id`` is the join key every consumer groups on, so guarantee it
+    # unconditionally. A curated layer_name without an id used to leave the
+    # page unjoinable. The id is the stable slug; ``layer_name`` is display
+    # text the LLM enrichment pass rewrites, and must never be a grouping key.
+    # Derived with kg_curation's own slugify, so a fallback id is byte-identical
+    # to the id that pass would mint for the same layer. A near-miss here points
+    # a file page at a layer page that does not exist.
+    page.metadata["layer_id"] = ctx.kg_layer_id or "layer:{}".format(
+        _slugify(str(page.metadata["layer_name"]))
+    )
 
     sources: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -192,6 +203,8 @@ class PageGenerator(PerTypeGenerationMixin, DeterministicRenderMixin):
         # Registered on whatever env we ended up with (including one a caller
         # injected), since deterministic templates depend on it.
         self._jinja_env.filters.setdefault("oneline", oneline)
+        self._jinja_env.filters.setdefault("as_markdown", as_markdown)
+        self._jinja_env.filters.setdefault("signature", signature)
 
     # ------------------------------------------------------------------
     # generate_all — orchestration (delegates to orchestrate.py)

@@ -45,13 +45,8 @@ function readTour(overview: DocPage | undefined): TourStop[] {
 }
 
 function readLayerOrder(overview: DocPage | undefined): string[] {
-  const raw = overview?.metadata?.["layer_order"];
+  const raw = overview?.metadata?.["layer_order_ids"] ?? overview?.metadata?.["layer_order"];
   return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
-}
-
-function metaString(page: DocPage, key: string): string | undefined {
-  const v = page.metadata?.[key];
-  return typeof v === "string" ? v : undefined;
 }
 
 /**
@@ -150,7 +145,10 @@ export function buildPresentModel(
   };
   const layerPages = pages
     .filter((p) => p.page_type === "layer_page")
-    .sort((a, b) => rankOf(metaString(a, "layer_name")) - rankOf(metaString(b, "layer_name")))
+    // Rank on the layer page's target_path, which is the stable ``layer:<slug>``
+    // id. layer_name is display text the LLM rewrites between generations, so
+    // ranking on it silently drops every layer to MAX_SAFE_INTEGER.
+    .sort((a, b) => rankOf(a.target_path) - rankOf(b.target_path))
     .slice(0, MAX_LAYER_SLIDES);
   for (const p of layerPages) {
     // Layer pages generated with the deterministic architecture diagram embed

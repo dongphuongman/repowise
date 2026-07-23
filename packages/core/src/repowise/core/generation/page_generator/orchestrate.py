@@ -145,7 +145,10 @@ class _GenerationRun:
         # and reused by level-8 onboarding, the repo overview, and the agent
         # surface. Empty until _compute_ia() runs.
         self.tour_stops: list[dict] = []
+        # Display names, in spine order. Rendered as prose and served over MCP.
         self.layer_order: list[str] = []
+        # The same spine as stable layer ids. This is the join key.
+        self.layer_order_ids: list[str] = []
 
         # Selection allow-sets (populated by _compute_selection).
         self.selection: Any = None
@@ -404,7 +407,7 @@ class _GenerationRun:
         the import graph) and reference only pages that will exist, so neither
         spawns new LLM work.
         """
-        from ..layers import compute_layer_order, infer_layer
+        from ..layers import compute_layer_order, infer_layer, layer_key
         from ..tour import build_tour
 
         import_edges = self._file_import_edges()
@@ -437,13 +440,31 @@ class _GenerationRun:
             for p in self.parsed_files
             if getattr(p, "file_info", None)
         }
+        # Order on the curated layer *id*, never on ``layer_name``. The name is
+        # a display string the layer-enrichment pass rewrites, so it drifts
+        # between generations and cannot be a join key; the id is stable by
+        # construction (kg_curation mints it as ``layer:`` + slug) and is what
+        # ``_attach_file_provenance`` stamps on each page.
+        #
+        # The two are kept side by side rather than one replacing the other,
+        # because they answer different questions. ``layer_order_ids`` is what
+        # the tree and the file pages join on. ``layer_order`` stays a list of
+        # human names, because it is also rendered as prose in the onboarding
+        # pages and published over MCP, where a slug would be user-visible.
         file_layers: dict[str, str] = {}
+        display_of: dict[str, str] = {}
         for path in self.sel_file_paths:
             kg_fc = self.kg_ctx.get_file_context(path) if self.kg_ctx.available else None
-            file_layers[path] = (
-                kg_fc.layer_name if kg_fc and kg_fc.layer_name else ""
-            ) or infer_layer(path, lang_by_path.get(path))
-        self.layer_order = compute_layer_order(file_layers, import_edges)
+            if kg_fc and kg_fc.layer_id:
+                layer_id = kg_fc.layer_id
+                display = kg_fc.layer_name or layer_id
+            else:
+                display = infer_layer(path, lang_by_path.get(path))
+                layer_id = f"layer:{layer_key(display)}"
+            file_layers[path] = layer_id
+            display_of.setdefault(layer_id, display)
+        self.layer_order_ids = compute_layer_order(file_layers, import_edges)
+        self.layer_order = [display_of.get(lid, lid) for lid in self.layer_order_ids]
 
     # ------------------------------------------------------------------
     # Level runner
@@ -600,6 +621,8 @@ class _GenerationRun:
                         page.metadata["guided_tour"] = self.tour_stops
                     if self.layer_order:
                         page.metadata["layer_order"] = self.layer_order
+                    if self.layer_order_ids:
+                        page.metadata["layer_order_ids"] = self.layer_order_ids
                     break
 
         return self._finalize(all_pages)
@@ -703,12 +726,20 @@ def _compute_kg_file_scores(kg_ctx: Any) -> dict[str, float]:
 
 
 def _embed_item(page: GeneratedPage) -> tuple[str, str, dict]:
-    """Build the ``(page_id, text, metadata)`` tuple for embedding."""
+    """Build the ``(page_id, text, metadata)`` tuple for embedding.
+
+    ``title`` is load-bearing, not decoration: it feeds the coverage rerank
+    haystack and the grounding corpus on the serving side. Omitting it here
+    (as this did until 2026-07) left every page embedded at generation time
+    with a blank title, while ``reindex`` and ``doctor --repair`` set it, so
+    the store disagreed with itself depending on how a page got there.
+    """
     summary = overview_summary(page.content)
     return (
         page.page_id,
         page.content,
         {
+            "title": page.title,
             "page_type": page.page_type,
             "target_path": page.target_path,
             "content": page.content[:600],
