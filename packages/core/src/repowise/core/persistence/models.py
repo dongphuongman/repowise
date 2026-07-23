@@ -135,6 +135,31 @@ class Page(Base):
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     # Developer-authored notes that survive LLM re-generation.
     human_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Where the page sits in the wiki -----------------------------------
+    # Hierarchy lives here rather than being reassembled by each reader from
+    # page_type and target_path prefixes, so MCP, the web app and the editor
+    # extension all navigate the same tree.
+    #
+    # parent_page_id references another page's id but carries no foreign key,
+    # because the generated-page sweep deletes parents whose structural key
+    # moved and the surviving children have to outlive them. Placement drops
+    # any edge that does not land on a real page, so a dangling parent is
+    # prevented where the tree is built rather than by the database.
+    parent_page_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    # Rank among siblings sharing a parent. Reading order, deliberately not
+    # generation_level, which is a build dependency order and unrelated.
+    display_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Dotted position in the outline, e.g. "2.4.1". Display only: it is
+    # recomputed from the tree, so nothing may key on it.
+    section_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The stable identity a structurally-keyed page is derived from, kept
+    # alongside the id so a key change is visible rather than only inferable
+    # from a page that stopped being reproduced.
+    structural_key: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

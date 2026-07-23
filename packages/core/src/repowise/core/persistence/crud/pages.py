@@ -47,6 +47,10 @@ def _apply_page_upsert(
     confidence: float,
     freshness_status: str,
     meta_json: str,
+    parent_page_id: str | None,
+    display_order: int,
+    section_number: str | None,
+    structural_key: str | None,
     created_at: datetime,
     updated_at: datetime,
     now: datetime,
@@ -63,15 +67,26 @@ def _apply_page_upsert(
         # Idempotent no-op: content, prompt hash and model all unchanged, so
         # do not bump the version or spawn a PageVersion snapshot; only refresh
         # the cheap derived fields (metadata enrichment lands here).
+        #
+        # "Cheap derived" means anything describing where a page sits rather
+        # than what it says. Those fields come from the repo's structure, not
+        # from the page's own bytes, so they can legitimately change while the
+        # content hash does not: a renamed page, or one whose siblings moved.
+        # A field left out here is frozen at whatever the first run wrote.
         if (
             existing.content == content
             and existing.source_hash == source_hash
             and existing.model_name == model_name
         ):
+            existing.title = title
             existing.summary = summary
             existing.target_path = target_path
             existing.freshness_status = freshness_status
             existing.metadata_json = meta_json
+            existing.parent_page_id = parent_page_id
+            existing.display_order = display_order
+            existing.section_number = section_number
+            existing.structural_key = structural_key
             return existing
 
         # Archive the current state before overwriting
@@ -110,6 +125,10 @@ def _apply_page_upsert(
         existing.confidence = confidence
         existing.freshness_status = freshness_status
         existing.metadata_json = meta_json
+        existing.parent_page_id = parent_page_id
+        existing.display_order = display_order
+        existing.section_number = section_number
+        existing.structural_key = structural_key
         existing.updated_at = updated_at
         return existing
 
@@ -132,6 +151,10 @@ def _apply_page_upsert(
         confidence=confidence,
         freshness_status=freshness_status,
         metadata_json=meta_json,
+        parent_page_id=parent_page_id,
+        display_order=display_order,
+        section_number=section_number,
+        structural_key=structural_key,
         created_at=created_at,
         updated_at=updated_at,
     )
@@ -159,6 +182,10 @@ async def upsert_page(
     confidence: float = 1.0,
     freshness_status: str = "fresh",
     metadata: dict | None = None,
+    parent_page_id: str | None = None,
+    display_order: int = 0,
+    section_number: str | None = None,
+    structural_key: str | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
 ) -> Page:
@@ -194,6 +221,10 @@ async def upsert_page(
         confidence=confidence,
         freshness_status=freshness_status,
         meta_json=meta_json,
+        parent_page_id=parent_page_id,
+        display_order=display_order,
+        section_number=section_number,
+        structural_key=structural_key,
         created_at=created_at or now,
         updated_at=updated_at or now,
         now=now,
@@ -262,6 +293,10 @@ async def upsert_page_from_generated(
         confidence=gp.confidence,  # type: ignore[attr-defined]
         freshness_status=gp.freshness_status,  # type: ignore[attr-defined]
         metadata=gp.metadata,  # type: ignore[attr-defined]
+        parent_page_id=getattr(gp, "parent_page_id", None),
+        display_order=getattr(gp, "display_order", 0),
+        section_number=getattr(gp, "section_number", None),
+        structural_key=getattr(gp, "structural_key", None),
         created_at=_parse_dt(gp.created_at),  # type: ignore[attr-defined]
         updated_at=_parse_dt(gp.updated_at),  # type: ignore[attr-defined]
     )
@@ -337,6 +372,10 @@ async def upsert_pages_from_generated(
                 confidence=gp.confidence,
                 freshness_status=gp.freshness_status,
                 meta_json=json.dumps(gp.metadata or {}),
+                parent_page_id=getattr(gp, "parent_page_id", None),
+                display_order=getattr(gp, "display_order", 0),
+                section_number=getattr(gp, "section_number", None),
+                structural_key=getattr(gp, "structural_key", None),
                 created_at=_parse_dt(gp.created_at) or now,
                 updated_at=_parse_dt(gp.updated_at) or now,
                 now=now,
