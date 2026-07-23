@@ -9,18 +9,39 @@ in core so the OSS server and hosted share it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from repowise.cli.helpers import console, load_state
 from repowise.core.generation.cascade import CascadeMode
 from repowise.core.generation.page_selection import PageSelectionIntent
-from repowise.core.generation.scope import ScopePlan, build_ranked_seed, resolve_scope
+from repowise.core.generation.scope import ScopePlan, build_cost_plans, resolve_scope
 from repowise.core.pipeline.scoped_generation import (
     execute_scoped_generation,
     rehydrate_repo,
 )
+
+# The page types a model writes. Everything else is structural and refreshes on
+# `repowise update`, so `generate` never writes one: it works on the concept
+# layer only. Its complement is the structural set in generate_cmd/command.py.
+_MODEL_WRITTEN_PAGE_TYPES = frozenset(
+    {"module_page", "repo_overview", "architecture_diagram", "onboarding"}
+)
+
+
+def _narrow_to_model_written(plan: ScopePlan) -> ScopePlan:
+    """Drop structural pages from a resolved plan, so generate writes only prose.
+
+    ``--unwritten`` / ``--all`` / ``--path`` resolve against every page type, but
+    a structural page has no model to write it: including it would re-render it
+    from templates (a no-op that leaves it "unwritten") and inflate the headline
+    count. Keep only the model-written pages, in both the generate set and the
+    cascade fallout marked stale, and re-price from what remains.
+    """
+    gen = {pid for pid in plan.generate_ids if pid.split(":", 1)[0] in _MODEL_WRITTEN_PAGE_TYPES}
+    stale = {pid for pid in plan.stale_ids if pid.split(":", 1)[0] in _MODEL_WRITTEN_PAGE_TYPES}
+    return replace(plan, generate_ids=gen, stale_ids=stale, cost_plans=build_cost_plans(gen))
 
 
 @dataclass
@@ -32,18 +53,6 @@ class GenerateOutcome:
     marked_stale: int
     remaining_template_pages: int
     plan: ScopePlan
-
-
-def _coverage_from_top(top_n: int, n_files: int) -> float:
-    """Map ``--top N`` to the coverage fraction that budgets ~N pages.
-
-    ``compute_budget`` uses ``int(n_files * pct)`` for a large repo, so
-    ``pct = N / n_files`` yields a budget of about ``N``. Per-bucket floors and
-    the always-emitted repo-wide/onboarding pages nudge the actual count, which
-    is why the plan report (and the cost gate) show the real number before any
-    spend — ``--top`` is a target, not an exact count.
-    """
-    return min(1.0, max(0.0, top_n / max(1, n_files)))
 
 
 async def run_scoped_generation(
@@ -58,8 +67,6 @@ async def run_scoped_generation(
     yes: bool,
     dry_run: bool,
     gate_cost: Any,
-    coverage_pct: float | None = None,
-    top_n: int | None = None,
     interactive: bool = False,
 ) -> GenerateOutcome | None:
     """Resolve the scope, gate on cost, generate, persist, and heal.
@@ -110,7 +117,7 @@ async def run_scoped_generation(
         if rehydrated is None:
             console.print(
                 "[yellow]This repo has no wiki pages yet.[/yellow] "
-                "Run `repowise init --docs deterministic` or `repowise update --full` first."
+                "Run `repowise init --no-prose` or `repowise update --full` first."
             )
             return None
 
@@ -119,55 +126,30 @@ async def run_scoped_generation(
             "(graph + git reused from index)."
         )
 
-        # Ranked (coverage/top) and interactive runs replace the intent seed
-        # with an importance-ranked page-id set; explicit runs leave it None.
-        ranked_seed: set[str] | None = None
+        # A bare interactive run shows the wiki state and writes the unwritten
+        # pages (the caller's default intent); it only decides the cascade here.
         if interactive:
             from .chooser import run_interactive_chooser
 
             choice = run_interactive_chooser(
                 console,
                 records=rehydrated.records,
-                parsed_files=rehydrated.parsed_files,
-                graph_builder=rehydrated.graph_builder,
-                config=config,
-                kg_ctx=rehydrated.kg_ctx,
-                provider=provider,
-                repo_path=repo_path,
-                repo_name=rehydrated.repo_name,
                 deps=rehydrated.deps,
             )
             if choice is None:
                 return None
-            ranked_seed = choice.ranked_seed
             cascade_mode = choice.cascade_mode
-        elif coverage_pct is not None or top_n is not None:
-            pct = coverage_pct
-            if pct is None:
-                pct = _coverage_from_top(top_n or 0, len(rehydrated.parsed_files))
-            ranked_seed = build_ranked_seed(
-                parsed_files=rehydrated.parsed_files,
-                graph_builder=rehydrated.graph_builder,
-                config=config,
-                kg_ctx=rehydrated.kg_ctx,
-                records=rehydrated.records,
-                repo_name=rehydrated.repo_name,
-                coverage_pct=pct,
-            )
-            if not ranked_seed:
-                console.print(
-                    "[yellow]Everything in that coverage is already written.[/yellow] "
-                    "Nothing to generate."
-                )
-                return None
 
         plan = resolve_scope(
             records=rehydrated.records,
             intent=intent,
             cascade_mode=cascade_mode,
             deps=rehydrated.deps,
-            ranked_seed=ranked_seed,
+            ranked_seed=None,
         )
+        # generate writes the concept layer only; structural pages refresh on
+        # `repowise update`, so drop them from whatever the intent resolved to.
+        plan = _narrow_to_model_written(plan)
 
         if plan.unknown_page_ids:
             console.print(
@@ -245,7 +227,15 @@ async def run_scoped_generation(
 
 
 async def _page_stats(sf: Any, repo_id: str) -> tuple[int, int]:
-    """Return ``(total_pages, remaining_template_pages)`` from the DB."""
+    """Return ``(total_pages, remaining_stub_pages)`` from the DB.
+
+    A "stub" is a page a model was meant to write but has not yet: a
+    model-written page type still stamped ``provider_name='template'``.
+    Structural pages are permanently ``template`` by design, so counting them
+    would mean ``docs_mode`` could never flip to ``llm`` no matter how much
+    prose was written. The remaining-stub count is scoped to the concept layer
+    for exactly that reason.
+    """
     from sqlalchemy import func as sa_func
     from sqlalchemy import select as sa_select
 
@@ -262,7 +252,7 @@ async def _page_stats(sf: Any, repo_id: str) -> tuple[int, int]:
                 )
             ).scalar_one()
         )
-        templates = int(
+        stubs = int(
             (
                 await session.execute(
                     sa_select(sa_func.count())
@@ -270,11 +260,12 @@ async def _page_stats(sf: Any, repo_id: str) -> tuple[int, int]:
                     .where(
                         Page.repository_id == repo_id,
                         Page.provider_name == "template",
+                        Page.page_type.in_(list(_MODEL_WRITTEN_PAGE_TYPES)),
                     )
                 )
             ).scalar_one()
         )
-    return total, templates
+    return total, stubs
 
 
 def _report_plan(plan: ScopePlan, cascade_mode: CascadeMode) -> None:
