@@ -42,6 +42,7 @@ from repowise.server.mcp_server._transport import (
     guard_stdout,
     log_outcome,
 )
+from repowise.server.mcp_server._why_pointer import decisions_line
 
 _log = __import__("logging").getLogger("repowise.mcp")
 
@@ -808,12 +809,16 @@ _WORKSPACE_TOOL_LINES = {
 }
 
 
-def _instructions(enabled: Iterable[str] = ()) -> str:
-    """The server instructions, naming a workspace tool only when it is served."""
+def _instructions(enabled: Iterable[str] = (), repo_line: str | None = None) -> str:
+    """The server instructions, naming a workspace tool only when it is served.
+
+    *repo_line* says what get_why holds for the served repository.
+    """
+    text = f"{_INSTRUCTIONS}\n{repo_line}" if repo_line else _INSTRUCTIONS
     lines = [line for name, line in _WORKSPACE_TOOL_LINES.items() if name in enabled]
     if not lines:
-        return _INSTRUCTIONS
-    return f"{_INSTRUCTIONS}\nIn this workspace, use {' and '.join(lines)}."
+        return text
+    return f"{text}\nIn this workspace, use {' and '.join(lines)}."
 
 
 mcp = _RepowiseMCP(
@@ -852,7 +857,7 @@ def create_mcp_server(
     ensure_full_surface()
 
     enabled = apply_tool_selection(mcp, repo_path=repo_path, override=tools)
-    mcp._mcp_server.instructions = _instructions(enabled)
+    mcp._mcp_server.instructions = _instructions(enabled, decisions_line(repo_path))
     return mcp
 
 
@@ -1063,7 +1068,7 @@ def run_mcp(
 
         ensure_full_surface()
         enabled = apply_tool_selection(mcp, repo_path=repo_path, override=tools)
-        mcp._mcp_server.instructions = _instructions(enabled)
+        mcp._mcp_server.instructions = _instructions(enabled, decisions_line(repo_path))
     except BaseExceptionGroup as group:
         _raise_group_leaf(group, transport)
 
